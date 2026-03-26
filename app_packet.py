@@ -1,7 +1,10 @@
+import socket
 import struct
 from dataclasses import dataclass
+from packet import build_packet
+from config import *
 
-HEADER_FORMAT: str = '!IIB'
+HEADER_FORMAT: str = '!IIB' # seq, ack, flags
 HEADER_SIZE: int = struct.calcsize(HEADER_FORMAT)
 
 
@@ -34,6 +37,48 @@ class Packet:
     payload: bytes
 
     @staticmethod
+    def get_ack_packet(request: 'Packet', ack_num: int) -> 'Packet':
+        return Packet(
+            version=4,
+            ihl=5,
+            total_length=20 + 8 + HEADER_SIZE,
+            ttl=64,
+            protocol=request.protocol,
+            src_ip=request.dst_ip,
+            dst_ip=request.src_ip,
+            src_port=request.dst_port,
+            dst_port=request.src_port,
+            udp_length=8 + HEADER_SIZE,
+            udp_checksum=0,
+            seq_num=0,
+            ack_num=ack_num,
+            flags=FLAG_ACK,
+            payload=b"",
+        )
+
+    @staticmethod
+    def get_data_packet(file_contents: bytes, request: 'Packet', seq_num: int = 0, ack_num: int = 0) -> 'Packet':
+        payload_len = len(file_contents)
+        return Packet(
+            version=4,
+            ihl=5,
+            total_length=20 + 8 + HEADER_SIZE + payload_len,
+            ttl=64,
+            protocol=request.protocol,
+            src_ip=request.dst_ip,
+            dst_ip=request.src_ip,
+            src_port=request.dst_port,
+            dst_port=request.src_port,
+            udp_length=8 + HEADER_SIZE + payload_len,
+            udp_checksum=0,
+            seq_num=seq_num,
+            ack_num=ack_num,
+            flags=FLAG_DATA,
+            payload=file_contents,
+        )
+
+
+    @staticmethod
     def from_dict(d: dict) -> 'Packet':
         """Construct from Packet object dict"""
         raw_payload: bytes = d['payload']
@@ -56,3 +101,22 @@ class Packet:
             flags=flags,
             payload=raw_payload[HEADER_SIZE:]
         )
+
+    def to_bytes(self) -> bytes:
+        """
+        Encode packet into raw bytes using Person A's build_packet.
+        Packs the application header (seq, ack, flags) + payload,
+        then delegates IP/UDP construction to packet.py.
+        """
+
+        app_header: bytes = struct.pack(HEADER_FORMAT, self.seq_num, self.ack_num, self.flags)
+        app_data: bytes = app_header + self.payload
+
+        return build_packet(
+            src_ip=self.src_ip,
+            dst_ip=self.dst_ip,
+            src_port=self.src_port,
+            dst_port=self.dst_port,
+            payload=app_data
+        )
+
