@@ -227,3 +227,4 @@ def build_packet_simple(data: bytes) -> bytes:
         dst_port=SERVER_PORT,
         payload=data
     )
+
