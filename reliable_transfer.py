@@ -81,6 +81,13 @@ class Sender(ReliableTransferBase):
     def __init__(self, sock, dest_ip, dest_port):
         super().__init__(sock, dest_ip, dest_port, my_port=SERVER_PORT)
 
+        # Bind socket to server IP
+        try:
+            self.sock.bind((SERVER_IP, 0))  # port 0 for raw socket
+        except OSError:
+            # Socket may already be bound, ignore
+            pass
+
         # Sender-specific buffers with descriptive names
         self.pending_data_queue = []  # DATA packets waiting to be sent
         self.unacked_packets = []  # Packets sent but not yet acknowledged
@@ -210,6 +217,13 @@ class Receiver(ReliableTransferBase):
     def __init__(self, sock, dest_ip, dest_port):
         super().__init__(sock, dest_ip, dest_port, my_port=CLIENT_PORT)
 
+        # Bind socket to client IP (raw socket binding to IP only, port irrelevant)
+        try:
+            self.sock.bind((CLIENT_IP, 0))  # port 0 for raw socket
+        except OSError:
+            # Socket may already be bound, ignore
+            pass
+
         # Receiver-specific buffers
         self.received_data = {}  # seq_num -> payload
         self.requested_file = ""  # Name of requested file
@@ -295,8 +309,6 @@ class Receiver(ReliableTransferBase):
 
 class ReliableTransfer:
     """
-    Facade class maintaining backward compatibility with original API.
-
     # Server side — waits for a request, then sends
     rt = ReliableTransfer(sock, role='sender')
     rt.listen_and_serve()  # listens for REQ, then sends the file
