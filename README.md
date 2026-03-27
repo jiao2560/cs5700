@@ -49,14 +49,14 @@ Example parsed output:
 ## Reliable Transfer API
 
 ```python
-sender = Sender(my_socket, '127.0.0.1', 8000)
+sender = Sender(my_socket, ...)
 sender.listen_and_serve()
 ```
 
 Sender, or server, is now listening for file requests and serving file request packets.
 
 ```python
-receiver = Receiver(my_socket, '127.0.0.1', 8000)
+receiver = Receiver(my_socket, ...)
 receiver.request_file("text.txt", "test")
 ```
 

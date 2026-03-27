@@ -1,0 +1,6 @@
+Name of the transferred file: /tmp/srft_test_ampilr57/test.txt
+Size of the transferred file: 58 bytes
+The number of packets sent from the server: 2
+The number of retransmitted packets from the server: 0
+The number of packets received from the client: 1
+The time duration of the file transfer: 00:00:00

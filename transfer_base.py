@@ -1,5 +1,6 @@
 import threading
 import hashlib
+import time
 from collections import defaultdict
 from config import *
 from packet import *
@@ -33,24 +34,41 @@ class ReliableTransferBase:
         # Buffers (specific to sender/receiver will be initialized in subclasses)
         self.expiry_time = defaultdict(float)
 
+        # Metrics tracking
+        self.start_time = 0.0
+        self.end_time = 0.0
+        self.packets_sent = 0
+        self.retransmissions = 0
+        self.packets_received = 0
+        self.file_size = 0
+        self.running = True
+
     def sliding_window_rcv(self):
         """
         Main receive loop - dispatches to handler methods based on packet type.
         """
-        while True:
-            data, _ = self.sock.recvfrom(65535)
-            parsed = Packet.from_dict(parse_packet(data))
-            if parsed.dst_port != self.my_port:
-                continue
+        while self.running:
+            try:
+                data, _ = self.sock.recvfrom(65535)
+                parsed = Packet.from_dict(parse_packet(data))
+                if parsed.dst_port != self.my_port:
+                    continue
 
-            if parsed.flags == FLAG_DATA:
-                self.handle_data(parsed)
-            elif parsed.flags == FLAG_ACK:
-                self.handle_ack(parsed)
-            elif parsed.flags == FLAG_REQ:
-                self.handle_req(parsed)
-            elif parsed.flags == FLAG_FIN:
-                self.handle_fin(parsed)
+                if parsed.flags == FLAG_DATA:
+                    self.handle_data(parsed)
+                elif parsed.flags == FLAG_ACK:
+                    self.handle_ack(parsed)
+                elif parsed.flags == FLAG_REQ:
+                    self.handle_req(parsed)
+                elif parsed.flags == FLAG_FIN:
+                    self.handle_fin(parsed)
+            except Exception as e:
+                # Socket may be closed or other error, break loop
+                print(f"[{self.__class__.__name__}] Receive thread exiting due to {e}")
+                import traceback
+
+                traceback.print_exc()
+                break
 
     def handle_data(self, packet):
         """Handle DATA packet - override in receiver"""
@@ -85,3 +103,16 @@ class ReliableTransferBase:
         # TODO: Close sockets used and any other cleanup
         # TODO: Write the output stub
         print(f"[INFO] {self.__class__.__name__} cleanup called")
+
+    def reset_state(self):
+        """Reset transfer state for next file transfer."""
+        with self.lock:
+            self.left, self.right = 0, 0
+            self.expiry_time.clear()
+            self.start_time = 0.0
+            self.end_time = 0.0
+            self.packets_sent = 0
+            self.retransmissions = 0
+            self.packets_received = 0
+            self.file_size = 0
+            self.running = True

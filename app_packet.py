@@ -81,23 +81,23 @@ class Packet:
         )
 
     @staticmethod
-    def get_fin_packet(request: "Packet") -> "Packet":
+    def get_fin_packet(request: "Packet", md5_hash: bytes = b"") -> "Packet":
         return Packet(
             version=4,
             ihl=5,
-            total_length=20 + 8 + HEADER_SIZE,
+            total_length=20 + 8 + HEADER_SIZE + len(md5_hash),
             ttl=64,
             protocol=request.protocol,
             src_ip=request.dst_ip,
             dst_ip=request.src_ip,
             src_port=request.dst_port,
             dst_port=request.src_port,
-            udp_length=8 + HEADER_SIZE,
+            udp_length=8 + HEADER_SIZE + len(md5_hash),
             udp_checksum=0,
             seq_num=0,
             ack_num=0,
             flags=FLAG_FIN,
-            payload=b"",
+            payload=md5_hash,
         )
 
     @staticmethod
