@@ -10,7 +10,6 @@ def main():
     """
     # Create a raw socket for UDP
     sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_UDP)
-    sock.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
 
     print("Server is listening...")
 

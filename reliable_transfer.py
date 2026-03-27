@@ -1,76 +1,10 @@
 import threading
-import hashlib
-import time
-from collections import defaultdict
 from typing import Optional
+import time
 from config import *
 from packet import *
 from app_packet import Packet, HEADER_SIZE
-
-
-class ReliableTransferBase:
-    """
-    Shared infrastructure for both sender and receiver.
-    Not meant to be instantiated directly.
-    """
-
-    def __init__(self, sock, dest_ip, dest_port, my_port):
-        self.sock = sock
-        self.dest_ip = dest_ip
-        self.dest_port = dest_port
-        self.my_port = my_port
-
-        # Sliding window state
-        self.left, self.right = 0, 0
-        self.lock = threading.Lock()
-
-        # Buffers (specific to sender/receiver will be initialized in subclasses)
-        self.expiry_time = defaultdict(float)
-
-    def sliding_window_rcv(self):
-        """
-        Main receive loop - dispatches to handler methods based on packet type.
-        """
-        while True:
-            data, _ = self.sock.recvfrom(65535)
-            parsed = Packet.from_dict(parse_packet(data))
-            if parsed.dst_port != self.my_port:
-                continue
-
-            if parsed.flags == FLAG_DATA:
-                self.handle_data(parsed)
-            elif parsed.flags == FLAG_ACK:
-                self.handle_ack(parsed)
-            elif parsed.flags == FLAG_REQ:
-                self.handle_req(parsed)
-            elif parsed.flags == FLAG_FIN:
-                self.handle_fin(parsed)
-
-    def handle_data(self, packet):
-        """Handle DATA packet - override in receiver"""
-        pass
-
-    def handle_ack(self, packet):
-        """Handle ACK packet - override in sender"""
-        pass
-
-    def handle_req(self, packet):
-        """Handle REQ packet - override in sender"""
-        pass
-
-    def handle_fin(self, packet):
-        """Handle FIN packet - override in receiver"""
-        pass
-
-    def md5(self, filepath):
-        """Compute MD5 hash of a file"""
-        with open(filepath, "rb") as f:
-            return hashlib.md5(f.read()).hexdigest()
-
-    def cleanup(self):
-        # TODO: Close sockets used and any other cleanup
-        # TODO: Write the output stub
-        ...
+from transfer_base import ReliableTransferBase
 
 
 class Sender(ReliableTransferBase):
@@ -79,21 +13,15 @@ class Sender(ReliableTransferBase):
     """
 
     def __init__(self, sock, dest_ip, dest_port):
-        super().__init__(sock, dest_ip, dest_port, my_port=SERVER_PORT)
+        super().__init__(
+            sock, dest_ip, dest_port, my_port=SERVER_PORT, bind_ip=SERVER_IP
+        )
 
-        # Bind socket to server IP
-        try:
-            self.sock.bind((SERVER_IP, 0))  # port 0 for raw socket
-        except OSError:
-            # Socket may already be bound, ignore
-            pass
-
-        # Sender-specific buffers with descriptive names
-        self.pending_data_queue = []  # DATA packets waiting to be sent
-        self.unacked_packets = []  # Packets sent but not yet acknowledged
+        self.pending_data_queue = []
+        self.unacked_packets = []
         self.client_req = None  # The REQ packet that initiated transfer
-        self.all_chunks_queued = False  # All file chunks added to pending queue
-        self.fin_sent = False  # FIN packet sent flag
+        self.all_chunks_queued = False
+        self.fin_sent = False
 
     def sliding_window_send(self):
         """
@@ -123,10 +51,6 @@ class Sender(ReliableTransferBase):
                         raw = packet.to_bytes()
                         self.sock.sendto(raw, (packet.dst_ip, packet.dst_port))
                         self.expiry_time[packet.seq_num] = now + TIMEOUT
-
-    def handle_data(self, packet):
-        """Sender ignores DATA packets"""
-        pass
 
     def handle_ack(self, packet):
         """
@@ -164,10 +88,6 @@ class Sender(ReliableTransferBase):
         """
         requested_file = str(packet.payload)
         self.transfer_file(requested_file, packet)
-
-    def handle_fin(self, packet):
-        """Sender ignores FIN packets"""
-        pass
 
     def transfer_file(self, file_path: str, req: Packet) -> None:
         """
@@ -215,19 +135,13 @@ class Receiver(ReliableTransferBase):
     """
 
     def __init__(self, sock, dest_ip, dest_port):
-        super().__init__(sock, dest_ip, dest_port, my_port=CLIENT_PORT)
+        super().__init__(
+            sock, dest_ip, dest_port, my_port=CLIENT_PORT, bind_ip=CLIENT_IP
+        )
 
-        # Bind socket to client IP (raw socket binding to IP only, port irrelevant)
-        try:
-            self.sock.bind((CLIENT_IP, 0))  # port 0 for raw socket
-        except OSError:
-            # Socket may already be bound, ignore
-            pass
-
-        # Receiver-specific buffers
-        self.received_data = {}  # seq_num -> payload
-        self.requested_file = ""  # Name of requested file
-        self.output_file = ""  # Where to save received file
+        self.received_data = {}
+        self.requested_file = ""
+        self.output_file = ""
 
     def handle_data(self, packet):
         """
@@ -236,7 +150,7 @@ class Receiver(ReliableTransferBase):
         with self.lock:
             self.received_data[packet.seq_num] = packet.payload
 
-            # Calculate cumulative ACK (first missing sequence number)
+            # cumulative ACK
             ack_num = 0
             while ack_num in self.received_data:
                 ack_num += 1
@@ -245,14 +159,6 @@ class Receiver(ReliableTransferBase):
             ack_packet = Packet.get_ack_packet(packet, ack_num)
             raw = ack_packet.to_bytes()
             self.sock.sendto(raw, (ack_packet.dst_ip, ack_packet.dst_port))
-
-    def handle_ack(self, packet):
-        """Receiver ignores ACK packets"""
-        pass
-
-    def handle_req(self, packet):
-        """Receiver ignores REQ packets"""
-        pass
 
     def handle_fin(self, packet):
         """
@@ -287,7 +193,6 @@ class Receiver(ReliableTransferBase):
         """
         Client entry point: send REQ packet, start receiver thread.
         """
-        # Create REQ packet using factory method
         req_packet = Packet.get_req_packet(
             filename=filename,
             src_ip=CLIENT_IP,
@@ -301,43 +206,6 @@ class Receiver(ReliableTransferBase):
         self.requested_file = filename
         self.output_file = output_path if output_path else filename
 
-        # Start receiver thread
         rcv_thread = threading.Thread(target=self.sliding_window_rcv)
         rcv_thread.daemon = True
         rcv_thread.start()
-
-
-class ReliableTransfer:
-    """
-    # Server side — waits for a request, then sends
-    rt = ReliableTransfer(sock, role='sender')
-    rt.listen_and_serve()  # listens for REQ, then sends the file
-
-    # Client side — requests a file, then receives
-    rt = ReliableTransfer(sock, dest_ip, dest_port, role='receiver')
-    rt.request_file('photo.jpg', 'output.jpg')
-    """
-
-    def __init__(self, sock, dest_ip, dest_port, role):
-        if role == "sender":
-            self.impl = Sender(sock, dest_ip, dest_port)
-        else:  # "receiver"
-            self.impl = Receiver(sock, dest_ip, dest_port)
-        self.role = role
-
-    # Delegate methods to implementation
-    def listen_and_serve(self):
-        if self.role != "sender":
-            raise ValueError("listen_and_serve() only for sender role")
-        return self.impl.listen_and_serve()
-
-    def request_file(self, filename: str, output_path: Optional[str] = None):
-        if self.role != "receiver":
-            raise ValueError("request_file() only for receiver role")
-        return self.impl.request_file(filename, output_path)
-
-    def md5(self, filepath):
-        return self.impl.md5(filepath)
-
-    def cleanup(self):
-        return self.impl.cleanup()

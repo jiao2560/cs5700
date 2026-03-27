@@ -45,3 +45,19 @@ Example parsed output:
 - Source Port: `8888`
 - Destination Port: `9999`
 - Payload: `b'hello from client'`
+
+## Reliable Transfer API
+
+```python
+sender = Sender(my_socket, '127.0.0.1', 8000)
+sender.listen_and_serve()
+```
+
+Sender, or server, is now listening for file requests and serving file request packets.
+
+```python
+receiver = Receiver(my_socket, '127.0.0.1', 8000)
+receiver.request_file("text.txt", "test")
+```
+
+Receiver can request this given file from the server and reassemble the file.

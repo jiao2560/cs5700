@@ -1,31 +1,38 @@
 import socket
-from packet import build_packet
+import sys
+import time
 from config import CLIENT_IP, SERVER_IP, CLIENT_PORT, SERVER_PORT
 
 
 def main():
     """
-    Create a raw socket, manually build a UDP packet,
-    and send it to the server.
+    Client entry point: request a file from server and receive it.
+    Usage: python SRFT_UDPClient.py <filename> [output_path]
     """
-    # Create a raw socket for UDP
-    sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_UDP)
+    if len(sys.argv) < 2:
+        print(f"Usage: {sys.argv[0]} <filename> [output_path]")
+        sys.exit(1)
 
-    # Tell the OS that the IP header is included in the packet we build
+    filename = sys.argv[1]
+    output_path = sys.argv[2] if len(sys.argv) > 2 else filename
+
+    # Create raw socket for UDP with IP header included
+    sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_UDP)
     sock.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
 
-    payload = b"hello from client"
+    # Create Receiver instance (dest_ip/dest_port are server address)
 
-    packet = build_packet(
-        src_ip=CLIENT_IP,
-        dst_ip=SERVER_IP,
-        src_port=CLIENT_PORT,
-        dst_port=SERVER_PORT,
-        payload=payload
-    )
+    print(f"[SRFT Client] Requesting file '{filename}' from {SERVER_IP}:{SERVER_PORT}")
+    print(f"Output will be saved to: {output_path}")
 
-    sock.sendto(packet, (SERVER_IP, SERVER_PORT))
-    print("Packet sent!")
+    # Send request and start receiver thread
+
+    # Keep main thread alive (daemon threads run in background)
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n[SRFT Client] Transfer interrupted")
 
 
 if __name__ == "__main__":
