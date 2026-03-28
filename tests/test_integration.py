@@ -38,17 +38,22 @@ class TestIntegration(unittest.TestCase):
 
     def setUp(self):
         """Set up test fixtures."""
-        # Create a single raw socket (both sender and receiver share it)
-        self.raw_sock = socket.socket(
+        # Create separate raw sockets for sender and receiver
+        self.sender_sock = socket.socket(
             socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_UDP
         )
-        self.raw_sock.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
+        self.sender_sock.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
 
-        # Instantiate sender and receiver with the same socket
+        self.receiver_sock = socket.socket(
+            socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_UDP
+        )
+        self.receiver_sock.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
+
+        # Instantiate sender and receiver with separate sockets
         # Sender binds to SERVER_IP, receiver binds to CLIENT_IP
-        # The second bind will fail silently (caught in __init__)
-        self.sender = Sender(self.raw_sock, CLIENT_IP, CLIENT_PORT)
-        self.receiver = Receiver(self.raw_sock, SERVER_IP, SERVER_PORT)
+        # The second bind will fail silently (caught in __init__) if using same IP
+        self.sender = Sender(self.sender_sock, CLIENT_IP, CLIENT_PORT)
+        self.receiver = Receiver(self.receiver_sock, SERVER_IP, SERVER_PORT)
 
         # Create temporary directory for test files
         self.temp_dir = tempfile.mkdtemp(prefix="srft_test_")
@@ -63,8 +68,9 @@ class TestIntegration(unittest.TestCase):
         self.sender.running = False
         self.receiver.running = False
 
-        # Close the shared socket
-        self.raw_sock.close()
+        # Close both sockets
+        self.sender_sock.close()
+        self.receiver_sock.close()
 
         # Remove temporary directory
         shutil.rmtree(self.temp_dir, ignore_errors=True)
@@ -165,9 +171,22 @@ class TestIntegration(unittest.TestCase):
             # Wait for retries to complete (max attempts = 3, timeout = 1 sec each)
             time.sleep(4)
 
-        # The receiver will have stopped itself (running = False)
+        # Explicitly stop the receiver before creating a new one
+        self.receiver.running = False
+        self.receiver.req_retransmit_active = False
+        self.receiver.transfer_complete = True
+        # Close socket to unblock receiver threads
+        self.receiver_sock.close()
+        time.sleep(0.3)  # Allow threads to exit
+
+        # Create a new socket for the new receiver instance
+        self.receiver_sock = socket.socket(
+            socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_UDP
+        )
+        self.receiver_sock.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
+
         # Create a new receiver instance for the successful transfer
-        self.receiver = Receiver(self.raw_sock, SERVER_IP, SERVER_PORT)
+        self.receiver = Receiver(self.receiver_sock, SERVER_IP, SERVER_PORT)
 
         # Create a real test file
         test_content = b"Successful transfer after failure"

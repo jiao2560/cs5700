@@ -59,9 +59,14 @@ class Packet:
 
     @staticmethod
     def get_data_packet(
-        file_contents: bytes, request: "Packet", seq_num: int = 0, ack_num: int = 0
+        file_contents: bytes,
+        request: "Packet",
+        seq_num: int = 0,
+        ack_num: int = 0,
+        last: bool = False,
     ) -> "Packet":
         payload_len = len(file_contents)
+        flags = FLAG_DATA_LAST if last else FLAG_DATA
         return Packet(
             version=4,
             ihl=5,
@@ -76,7 +81,7 @@ class Packet:
             udp_checksum=0,
             seq_num=seq_num,
             ack_num=ack_num,
-            flags=FLAG_DATA,
+            flags=flags,
             payload=file_contents,
         )
 

@@ -28,16 +28,21 @@ class Sender(ReliableTransferBase):
         self.md5_hash = b""
         self.total_chunks = 0
         self.requested_file_name = ""
+        self.sent_fin_packet = None  # Store FIN packet object
+        self.last_chunk_seq = -1  # Sequence number of last DATA chunk
 
     def sliding_window_send(self):
         """
         Sender thread: sends packets from pending queue, retransmits on timeout.
+        Unified retransmission for DATA and FIN packets.
         """
+        print("[SERVER] sliding_window_send thread started")
         while self.running:
             with self.lock:
                 # Send if window not full and we have pending data
                 if self.pending_data_queue and self.right - self.left < WINDOW_SIZE:
                     packet = self.pending_data_queue.pop(0)
+                    print(f"[SERVER] Sending DATA packet seq={packet.seq_num}")
                     try:
                         raw = packet.to_bytes()
                         self.sock.sendto(raw, (packet.dst_ip, packet.dst_port))
@@ -46,34 +51,63 @@ class Sender(ReliableTransferBase):
                         if packet.seq_num >= self.right:
                             self.right = packet.seq_num + 1
                         self.packets_sent += 1
-                    except (OSError, AttributeError):
-                        # Socket might be closed
-                        self.running = False
+                    except (OSError, AttributeError) as e:
+                        # Socket might be closed; put packet back and continue
+                        print(
+                            f"[SERVER] Error sending DATA packet seq={packet.seq_num}: {e}"
+                        )
+                        self.pending_data_queue.insert(0, packet)  # Put back at front
+                        time.sleep(0.1)  # Brief pause before retry
+                        continue
 
-            # Retransmit FIN if not acknowledged
+            # Unified retransmission for expired packets (DATA and FIN)
             with self.lock:
                 now = time.monotonic()
-                if (
-                    self.client_req is not None
-                    and self.fin_sent
-                    and not self.fin_acked
-                    and now > self.fin_expiry
-                ):
-                    print(f"[SERVER] Retransmitting FIN for {self.requested_file_name}")
-                    try:
-                        fin_packet = Packet.get_fin_packet(
-                            self.client_req, self.md5_hash
+                # Retransmit expired DATA packets that haven't been ACKed
+                for packet in self.unacked_packets:
+                    if packet.seq_num < self.left:
+                        continue  # Already acknowledged
+                    expiry = self.expiry_time.get(packet.seq_num)
+                    if expiry and now > expiry:
+                        print(
+                            f"[SERVER] Retransmitting DATA packet seq={packet.seq_num}"
                         )
-                        self.sock.sendto(
-                            fin_packet.to_bytes(),
-                            (fin_packet.dst_ip, fin_packet.dst_port),
+                        try:
+                            raw = packet.to_bytes()
+                            self.sock.sendto(raw, (packet.dst_ip, packet.dst_port))
+                            self.expiry_time[packet.seq_num] = now + TIMEOUT
+                            self.packets_sent += 1
+                            self.retransmissions += 1
+                        except (OSError, AttributeError) as e:
+                            print(
+                                f"[SERVER] Error retransmitting DATA seq={packet.seq_num}: {e}"
+                            )
+                            time.sleep(0.1)
+
+                # Retransmit expired FIN packet if not acknowledged
+                if self.sent_fin_packet and not self.fin_acked:
+                    expiry = self.expiry_time.get("FIN")
+                    if expiry and now > expiry:
+                        print(
+                            f"[SERVER] Retransmitting FIN for {self.requested_file_name}"
                         )
-                        self.fin_expiry = now + TIMEOUT
-                        self.packets_sent += 1
-                        self.retransmissions += 1
-                    except (OSError, AttributeError):
-                        # Socket might be closed
-                        self.running = False
+                        try:
+                            raw = self.sent_fin_packet.to_bytes()
+                            self.sock.sendto(
+                                raw,
+                                (
+                                    self.sent_fin_packet.dst_ip,
+                                    self.sent_fin_packet.dst_port,
+                                ),
+                            )
+                            self.expiry_time["FIN"] = now + TIMEOUT
+                            self.packets_sent += 1
+                            self.retransmissions += 1
+                        except (OSError, AttributeError) as e:
+                            print(f"[SERVER] Error retransmitting FIN packet: {e}")
+                            time.sleep(0.1)
+
+            time.sleep(0.001)
 
     def handle_ack(self, packet):
         """
@@ -81,6 +115,7 @@ class Sender(ReliableTransferBase):
         send FIN if all chunks transferred and acknowledged.
         """
         with self.lock:
+            print(f"[SERVER] Received ACK {packet.ack_num}")
             self.left = packet.ack_num
             self.packets_received += 1
 
@@ -92,33 +127,29 @@ class Sender(ReliableTransferBase):
                 p for p in self.unacked_packets if p.seq_num >= packet.ack_num
             ]
 
-            # Send FIN if all done
+            old_fin_sent = self.fin_sent
+            # Send FIN if all DATA packets acknowledged
+            print(
+                f"[SERVER] ACK {packet.ack_num}: left={self.left}, last_chunk_seq={self.last_chunk_seq}, all_chunks_queued={self.all_chunks_queued}, fin_sent={self.fin_sent}"
+            )
             if (
                 self.all_chunks_queued
-                and not self.pending_data_queue
-                and not self.unacked_packets
+                and self.left > self.last_chunk_seq
                 and not self.fin_sent
                 and self.client_req is not None
             ):
-                try:
-                    fin_packet = Packet.get_fin_packet(self.client_req, self.md5_hash)
-                    self.sock.sendto(
-                        fin_packet.to_bytes(), (fin_packet.dst_ip, fin_packet.dst_port)
-                    )
-                    self.fin_sent = True
-                    self.fin_expiry = time.monotonic() + TIMEOUT
-                    self.packets_sent += 1
-                except (OSError, AttributeError):
-                    # Socket might be closed
-                    pass
+                print(f"[SERVER] Condition met: sending FIN")
+                self._send_fin_packet()
 
             # Check if this ACK acknowledges FIN (ACK number equals total chunks after FIN sent)
             if (
-                self.fin_sent
+                old_fin_sent
                 and not self.fin_acked
                 and packet.ack_num == self.total_chunks
             ):
+                print(f"[SERVER] Received ACK {packet.ack_num} acknowledging FIN")
                 self.fin_acked = True
+                self.expiry_time.pop("FIN", None)  # Remove FIN expiry
                 self.end_time = time.monotonic()
                 self.generate_output_report()
                 self.reset_transfer_state()
@@ -159,6 +190,9 @@ class Sender(ReliableTransferBase):
         self.fin_expiry = 0.0
         self.md5_hash = b""
         self.total_chunks = 0
+        self.requested_file_name = ""
+        self.sent_fin_packet = None
+        self.last_chunk_seq = -1
         self.left = 0
         self.right = 0
         # Keep metrics for report already saved, but reset for next transfer
@@ -169,6 +203,28 @@ class Sender(ReliableTransferBase):
         self.packets_received = 0
         self.file_size = 0
 
+    def request_file(self, filename: str, output_path: Optional[str] = None) -> None:
+        """Sender cannot request files."""
+        raise NotImplementedError("Sender cannot request files")
+
+    def _send_fin_packet(self):
+        """Create, store, and send FIN packet. Caller must hold lock."""
+        if self.client_req is None:
+            return
+        print(f"[SERVER] Sending FIN for {self.requested_file_name}")
+        self.sent_fin_packet = Packet.get_fin_packet(self.client_req, self.md5_hash)
+        try:
+            self.sock.sendto(
+                self.sent_fin_packet.to_bytes(),
+                (self.sent_fin_packet.dst_ip, self.sent_fin_packet.dst_port),
+            )
+            self.fin_sent = True
+            self.expiry_time["FIN"] = time.monotonic() + TIMEOUT
+            self.fin_expiry = time.monotonic() + TIMEOUT
+            self.packets_sent += 1
+        except (OSError, AttributeError) as e:
+            print(f"[SERVER] Error sending FIN packet: {e}")
+
     def handle_req(self, packet):
         """
         Received file request: start file transfer.
@@ -177,17 +233,21 @@ class Sender(ReliableTransferBase):
         print(f"[SERVER] Received REQ for {requested_file}")
 
         with self.lock:
-            # Check if we're already processing a transfer
+            # Check if we're already processing a request (any file)
             if self.client_req is not None:
                 print(
-                    f"[SERVER] Already processing transfer for {self.requested_file_name}, ignoring duplicate REQ"
+                    f"[SERVER] Already processing a request, ignoring duplicate REQ for {requested_file}"
                 )
                 return
 
-            self.reset_transfer_state()
+            # Mark that we're processing a request BEFORE resetting state
+            self.client_req = packet
+            self.reset_transfer_state()  # This clears client_req, so we restore it
+            self.client_req = packet
             self.requested_file_name = requested_file
-            print(f"[SERVER] Calling transfer_file for {requested_file}")
-            self.transfer_file(requested_file, packet)
+
+        print(f"[SERVER] Calling transfer_file for {requested_file}")
+        self.transfer_file(requested_file, packet)
 
         print(f"[SERVER] REQ handled for {requested_file}")
 
@@ -196,39 +256,62 @@ class Sender(ReliableTransferBase):
         Read file, split into chunks, add DATA packets to pending queue.
         """
         print(f"[SERVER] transfer_file called for {file_path}")
-        # Clear any previous pending data
-        self.pending_data_queue.clear()
-        self.unacked_packets.clear()
-        self.expiry_time.clear()
-        self.left = 0
-        self.right = 0
 
         try:
             with open(file_path, "rb") as f:
                 data = f.read()
-                print(f"[SERVER] Read {len(data)} bytes from {file_path}")
+            print(f"[SERVER] Read {len(data)} bytes from {file_path}")
+
+            CHUNK_SIZE = MAX_PAYLOAD_SIZE - HEADER_SIZE
+            chunks = []
+            i = 0
+            chunk_idx = 0
+            while i < len(data):
+                chunk = data[i : i + CHUNK_SIZE]
+                chunks.append((chunk_idx, chunk))
+                i += len(chunk)
+                chunk_idx += 1
+
+            # Now acquire lock to update shared state
+            with self.lock:
+                # Clear any previous pending data
+                self.pending_data_queue.clear()
+                self.unacked_packets.clear()
+                self.expiry_time.clear()
+                self.left = 0
+                self.right = 0
+
                 self.file_size = len(data)
-                self.md5_hash = hashlib.md5(data).digest()  # 16 bytes
-                CHUNK_SIZE = MAX_PAYLOAD_SIZE - HEADER_SIZE
-                i = 0
-                chunk_idx = 0
-                while i < len(data):
-                    chunk = data[i : i + CHUNK_SIZE]
-                    self.pending_data_queue.append(
-                        Packet.get_data_packet(chunk, req, seq_num=chunk_idx)
-                    )
-                    i += len(chunk)
-                    chunk_idx += 1
+                self.md5_hash = hashlib.md5(data).digest()
                 self.total_chunks = chunk_idx
                 self.client_req = req
                 self.all_chunks_queued = True
                 self.start_time = time.monotonic()
+                self.last_chunk_seq = chunk_idx - 1 if chunk_idx > 0 else -1
+                print(
+                    f"[SERVER] total_chunks={self.total_chunks}, last_chunk_seq={self.last_chunk_seq}"
+                )
+
+                # Create and queue packets
+                for seq, chunk in chunks:
+                    is_last = seq == self.last_chunk_seq
+                    self.pending_data_queue.append(
+                        Packet.get_data_packet(chunk, req, seq_num=seq, last=is_last)
+                    )
+
                 print(
                     f"[SERVER] Created {chunk_idx} chunks, pending queue size: {len(self.pending_data_queue)}"
                 )
 
+                # For empty files (0 chunks), send FIN immediately
+                if chunk_idx == 0:
+                    print(f"[SERVER] Empty file, sending FIN immediately")
+                    self._send_fin_packet()
         except Exception as e:
             print(f"Encountered {e} while trying to read file {file_path}")
+            # Clean up state on transfer failure
+            with self.lock:
+                self.reset_transfer_state()
 
     def listen_and_serve(self) -> None:
         """
@@ -241,10 +324,6 @@ class Sender(ReliableTransferBase):
 
         send_thread.start()
         rcv_thread.start()
-
-    def request_file(self, filename: str, output_path: Optional[str] = None):
-        """Sender does not request files"""
-        raise NotImplementedError("Sender cannot request files")
 
 
 class Receiver(ReliableTransferBase):
@@ -262,7 +341,7 @@ class Receiver(ReliableTransferBase):
         self.output_file = ""
         self.req_attempts = 0
         self.req_expiry = 0.0
-        self.req_max_attempts = 3
+        self.req_max_attempts = 10
         self.server_md5 = b""
         self.transfer_complete = False
         self.start_time = 0.0
@@ -276,6 +355,9 @@ class Receiver(ReliableTransferBase):
         Store DATA payload, send cumulative ACK.
         """
         with self.lock:
+            is_last = packet.flags == FLAG_DATA_LAST
+            suffix = " (LAST)" if is_last else ""
+            print(f"[CLIENT] Received DATA seq={packet.seq_num}{suffix}")
             self.received_data[packet.seq_num] = packet.payload
             self.data_received = True  # Signal that we got data
             self.packets_received += 1
@@ -288,6 +370,7 @@ class Receiver(ReliableTransferBase):
                 ack_num += 1
 
             # Send ACK
+            print(f"[CLIENT] Sending ACK {ack_num}")
             try:
                 ack_packet = Packet.get_ack_packet(packet, ack_num)
                 raw = ack_packet.to_bytes()
@@ -302,19 +385,26 @@ class Receiver(ReliableTransferBase):
         Received FIN: extract MD5, send ACK, assemble file, verify MD5, cleanup.
         """
         with self.lock:
+            # Ignore duplicate FIN after reset
+            if not self.requested_file:
+                print("[CLIENT] Ignoring duplicate FIN (no active request)")
+                return
+
             self.server_md5 = packet.payload  # MD5 hash from server
             print(f"[CLIENT] Received FIN for {self.requested_file}")
             # Send ACK for FIN (cumulative ACK for all data)
             ack_num = 0
             while ack_num in self.received_data:
                 ack_num += 1
+            print(f"[CLIENT] Sending ACK {ack_num} for FIN")
             try:
                 ack_packet = Packet.get_ack_packet(packet, ack_num)
                 raw = ack_packet.to_bytes()
                 self.sock.sendto(raw, (ack_packet.dst_ip, ack_packet.dst_port))
                 self.packets_sent += 1  # ACK is sent packet
-            except (OSError, AttributeError):
+            except (OSError, AttributeError) as e:
                 # Socket might be closed
+                print(f"[CLIENT] Error sending ACK for FIN: {e}")
                 pass
 
             # Mark transfer complete to stop retransmission
@@ -430,9 +520,10 @@ class Receiver(ReliableTransferBase):
                             self.req_retransmit_active = False
                             break
                 if self.req_attempts >= self.req_max_attempts:
-                    print("[CLIENT] Max REQ attempts exceeded, aborting transfer")
+                    print(
+                        "[CLIENT] Max REQ attempts exceeded, stopping REQ retransmission"
+                    )
                     self.req_retransmit_active = False
-                    self.running = False  # Stop receiver thread
                     break
             time.sleep(0.1)
         # Clean up retransmission state
@@ -492,7 +583,3 @@ class Receiver(ReliableTransferBase):
             rcv_thread.start()
             self.receiver_thread_started = True
             self.running = True
-
-    def listen_and_serve(self):
-        """Receiver does not listen and serve"""
-        raise NotImplementedError("Receiver cannot listen and serve")

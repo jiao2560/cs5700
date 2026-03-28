@@ -21,6 +21,7 @@ from reliable_transfer import Sender, Receiver
 from app_packet import Packet, HEADER_SIZE
 from config import (
     FLAG_DATA,
+    FLAG_DATA_LAST,
     FLAG_ACK,
     FLAG_FIN,
     FLAG_REQ,
@@ -106,7 +107,7 @@ class TestSender(unittest.TestCase):
         # Check the created packet
         packet = self.sender.pending_data_queue[0]
         self.assertEqual(packet.seq_num, 0)
-        self.assertEqual(packet.flags, FLAG_DATA)
+        self.assertEqual(packet.flags, FLAG_DATA_LAST)
         self.assertEqual(packet.payload, file_content)
 
     @patch("reliable_transfer.time.monotonic")
@@ -139,10 +140,13 @@ class TestSender(unittest.TestCase):
         self.assertEqual(self.sender.total_chunks, 3)
         self.assertEqual(len(self.sender.pending_data_queue), 3)
 
-        # Check sequence numbers
+        # Check sequence numbers and flags
         for i, packet in enumerate(self.sender.pending_data_queue):
             self.assertEqual(packet.seq_num, i)
-            self.assertEqual(packet.flags, FLAG_DATA)
+            if i == self.sender.total_chunks - 1:
+                self.assertEqual(packet.flags, FLAG_DATA_LAST)
+            else:
+                self.assertEqual(packet.flags, FLAG_DATA)
 
         # Check chunk sizes
         self.assertEqual(len(self.sender.pending_data_queue[0].payload), chunk_size)
@@ -332,6 +336,7 @@ class TestSender(unittest.TestCase):
         self.sender.pending_data_queue = []
         self.sender.unacked_packets = []
         self.sender.total_chunks = 5
+        self.sender.last_chunk_seq = 4
         self.sender.left = 0
         self.sender.right = 5
 
@@ -368,11 +373,13 @@ class TestSender(unittest.TestCase):
         # Check state updated
         self.assertTrue(self.sender.fin_sent)
         self.assertEqual(self.sender.fin_expiry, 2000.0 + TIMEOUT)
+        self.assertEqual(self.sender.expiry_time["FIN"], 2000.0 + TIMEOUT)
         self.assertEqual(self.sender.packets_sent, 1)
+        self.assertFalse(self.sender.fin_acked)
 
-        # Should have called generate_output_report and reset_transfer_state
-        mock_report.assert_called_once()
-        mock_reset.assert_called_once()
+        # generate_output_report and reset_transfer_state should NOT be called yet
+        mock_report.assert_not_called()
+        mock_reset.assert_not_called()
 
     def test_handle_req(self):
         """Test handling REQ packet."""
@@ -588,6 +595,7 @@ class TestReceiver(unittest.TestCase):
         mock_data_packet.src_port = SERVER_PORT
         mock_data_packet.dst_ip = CLIENT_IP
         mock_data_packet.dst_port = CLIENT_PORT
+        mock_data_packet.flags = FLAG_DATA
 
         # Mock ACK packet creation
         mock_ack_packet = Mock(spec=Packet)
@@ -621,6 +629,7 @@ class TestReceiver(unittest.TestCase):
         mock_data_packet.src_port = SERVER_PORT
         mock_data_packet.dst_ip = CLIENT_IP
         mock_data_packet.dst_port = CLIENT_PORT
+        mock_data_packet.flags = FLAG_DATA
 
         # Mock ACK packet
         mock_ack_packet = Mock(spec=Packet)
@@ -653,6 +662,7 @@ class TestReceiver(unittest.TestCase):
         mock_data_packet.src_port = SERVER_PORT
         mock_data_packet.dst_ip = CLIENT_IP
         mock_data_packet.dst_port = CLIENT_PORT
+        mock_data_packet.flags = FLAG_DATA
 
         mock_ack_packet = Mock(spec=Packet)
         mock_ack_packet.dst_ip = SERVER_IP
@@ -755,6 +765,8 @@ class TestReceiver(unittest.TestCase):
                         with patch.object(
                             self.receiver, "_reset_receiver_state_no_lock"
                         ) as mock_reset:
+                            # Set requested_file as FIN expects an active request
+                            self.receiver.requested_file = "test.txt"
                             self.receiver.handle_fin(mock_fin_packet)
 
                             # Should store server MD5

@@ -47,6 +47,7 @@ class ReliableTransferBase:
         """
         Main receive loop - dispatches to handler methods based on packet type.
         """
+        print(f"[{self.__class__.__name__}] sliding_window_rcv thread started")
         while self.running:
             try:
                 data, _ = self.sock.recvfrom(65535)
@@ -54,7 +55,7 @@ class ReliableTransferBase:
                 if parsed.dst_port != self.my_port:
                     continue
 
-                if parsed.flags == FLAG_DATA:
+                if parsed.flags in (FLAG_DATA, FLAG_DATA_LAST):
                     self.handle_data(parsed)
                 elif parsed.flags == FLAG_ACK:
                     self.handle_ack(parsed)
@@ -62,13 +63,19 @@ class ReliableTransferBase:
                     self.handle_req(parsed)
                 elif parsed.flags == FLAG_FIN:
                     self.handle_fin(parsed)
+            except OSError as e:
+                # Socket closed or unrecoverable error, break loop
+                print(
+                    f"[{self.__class__.__name__}] Socket error, receive thread exiting: {e}"
+                )
+                break
             except Exception as e:
-                # Socket may be closed or other error, break loop
-                print(f"[{self.__class__.__name__}] Receive thread exiting due to {e}")
+                # Parsing or other non-fatal error, log and continue
+                print(f"[{self.__class__.__name__}] Error processing packet: {e}")
                 import traceback
 
                 traceback.print_exc()
-                break
+                continue
 
     def handle_data(self, packet):
         """Handle DATA packet - override in receiver"""
