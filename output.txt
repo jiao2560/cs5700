@@ -1,4 +1,4 @@
-Name of the transferred file: /tmp/srft_test_oyay78rc/large.txt
+Name of the transferred file: /tmp/srft_test_ne7yf8mp/large.txt
 Size of the transferred file: 3657 bytes
 The number of packets sent from the server: 4
 The number of retransmitted packets from the server: 0

@@ -46,18 +46,76 @@ Example parsed output:
 - Destination Port: `9999`
 - Payload: `b'hello from client'`
 
-## Reliable Transfer API
+---
+
+## Person B - Reliable File Transfer (Phase 1)
+
+### Overview
+
+This part implements reliable file transfer on top of Person A's raw socket foundation using a sliding window protocol with cumulative acknowledgments.
+
+### Completed Work
+
+- Created `reliable_transfer.py` with `Sender` (server) and `Receiver` (client) classes
+- Implemented sliding window protocol (window size = 4)
+- Added sequence numbers to data packets for ordering and duplicate detection
+- Implemented cumulative acknowledgments (ACK = next expected sequence number)
+- Added timeout (1.0s) and retransmission for lost packets
+- Split files into chunks, send with sequence numbers, reassemble at receiver
+- Added multithreading: separate send and receive threads for concurrency
+- Implemented MD5 hash verification (server sends hash in FIN, client verifies)
+- Generate output report `output.txt` with transfer statistics
+
+### Main Files
+
+- `reliable_transfer.py`: `Sender` and `Receiver` classes for reliable transfer
+- `transfer_base.py`: shared base class with receive loop and state management
+- `app_packet.py`: application-layer packet format (seq, ack, flags, payload)
+
+### Core Functions
+
+- `Sender.listen_and_serve()`: start server threads to handle file requests
+- `Receiver.request_file(filename, output_path)`: client entry point to request a file
+- `Packet.get_req_packet()`, `get_data_packet()`, `get_ack_packet()`, `get_fin_packet()`: create application packets
+- `ReliableTransferBase.sliding_window_rcv()`: base receive loop that dispatches packets
+
+### Protocol Flags (defined in `config.py`)
+
+- `FLAG_REQ` (3): client requests a file (payload = filename)
+- `FLAG_DATA` (0): server sends file chunk
+- `FLAG_DATA_LAST` (4): last file chunk
+- `FLAG_ACK` (1): client acknowledges received data (cumulative ACK)
+- `FLAG_FIN` (2): server signals transfer complete (payload = MD5 hash)
+
+### Usage Example
+
+See `tests/test_integration.py` for complete working examples:
 
 ```python
-sender = Sender(my_socket, ...)
+import socket
+from reliable_transfer import Sender, Receiver
+from config import SERVER_IP, SERVER_PORT, CLIENT_IP, CLIENT_PORT
+
+# Server (sender)
+sender_sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_UDP)
+sender_sock.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
+sender = Sender(sender_sock, CLIENT_IP, CLIENT_PORT)
 sender.listen_and_serve()
+
+# Client (receiver)
+receiver_sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_UDP)
+receiver_sock.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
+receiver = Receiver(receiver_sock, SERVER_IP, SERVER_PORT)
+receiver.request_file("test.txt", "received.txt")
 ```
 
-Sender, or server, is now listening for file requests and serving file request packets.
+### Test Results
 
-```python
-receiver = Receiver(my_socket, ...)
-receiver.request_file("text.txt", "test")
-```
-
-Receiver can request this given file from the server and reassemble the file.
+- **Unit tests**: `tests/test_reliable_transfer.py` (22 tests, all passing)
+- **Integration tests**: `tests/test_integration.py` (6 tests, all passing with root privileges)
+  - Basic file transfer
+  - Large file transfer (multiple chunks)
+  - Consecutive transfers
+  - Empty file handling
+  - Error handling (non‑existent files)
+  - Failed transfer recovery

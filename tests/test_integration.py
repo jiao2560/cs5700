@@ -50,29 +50,22 @@ class TestIntegration(unittest.TestCase):
         self.receiver_sock.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
 
         # Instantiate sender and receiver with separate sockets
-        # Sender binds to SERVER_IP, receiver binds to CLIENT_IP
-        # The second bind will fail silently (caught in __init__) if using same IP
         self.sender = Sender(self.sender_sock, CLIENT_IP, CLIENT_PORT)
         self.receiver = Receiver(self.receiver_sock, SERVER_IP, SERVER_PORT)
 
-        # Create temporary directory for test files
         self.temp_dir = tempfile.mkdtemp(prefix="srft_test_")
 
-        # Track threads for cleanup
         self.sender_thread = None
         self.receiver_thread = None
 
     def tearDown(self):
         """Clean up after each test."""
-        # Stop sender and receiver threads
         self.sender.running = False
         self.receiver.running = False
 
-        # Close both sockets
         self.sender_sock.close()
         self.receiver_sock.close()
 
-        # Remove temporary directory
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def _start_sender(self):
@@ -80,12 +73,8 @@ class TestIntegration(unittest.TestCase):
         self.sender_thread = threading.Thread(target=self.sender.listen_and_serve)
         self.sender_thread.daemon = True
         self.sender_thread.start()
-        # Small delay for thread startup
         time.sleep(0.1)
 
-    def _start_receiver(self):
-        """Start receiver thread (no-op - receiver threads are started by request_file)."""
-        pass
 
     @skip_if_not_root
     def test_file_transfer_success(self):
