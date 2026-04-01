@@ -1,0 +1,6 @@
+Name of the transferred file: /tmp/srft_test_gkrn4ajs/large.txt
+Size of the transferred file: 3657 bytes
+The number of packets sent from the server: 4
+The number of retransmitted packets from the server: 0
+The number of packets received from the client: 4
+The time duration of the file transfer: 00:00:00
