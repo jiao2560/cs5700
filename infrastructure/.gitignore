@@ -6,9 +6,6 @@
 *.tfvars.json
 *.terraform.lock.hcl
 
-# SSH keys
-*.pem
-*.ppk
 
 # Editor files
 *.swp
