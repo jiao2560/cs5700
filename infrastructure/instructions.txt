@@ -1,0 +1,56 @@
+instance_availability_zones = [
+  "us-east-1a",
+  "us-east-1a",
+]
+instance_ids = [
+  "i-040e18f87c0486ea2",
+  "i-0c2a9d8ef52e3821e",
+]
+instance_private_ips = [
+  "10.0.1.111",
+  "10.0.1.44",
+]
+instance_public_ips = [
+  "54.84.110.211",
+  "34.225.198.56",
+]
+project_setup_instructions = <<EOT
+
+SRFT Networking Project Infrastructure deployed successfully!
+
+Next steps:
+1. Copy project files to instances:
+   For each instance, use SCP to copy the project directory:
+
+   scp -r -i ~/.ssh/srft-networking-key.pem ../. ec2-user@54.84.110.211:/home/ec2-user/cs5700/
+     scp -r -i ~/.ssh/srft-networking-key.pem ../. ec2-user@34.225.198.56:/home/ec2-user/cs5700/
+
+2. Or use Session Manager and copy files manually:
+  aws ssm start-session --target i-040e18f87c0486ea2
+  aws ssm start-session --target i-0c2a9d8ef52e3821e
+
+3. Update configuration:
+   Edit config.py on each instance to use private IPs:
+   - SERVER_IP: 10.0.1.111
+   - CLIENT_IP: 10.0.1.44
+
+4. Test connectivity between instances using private IPs.
+
+Instance Details:
+Instance 1: i-040e18f87c0486ea2 | Public IP: 54.84.110.211 | Private IP: 10.0.1.111 | AZ: us-east-1a
+  Instance 2: i-0c2a9d8ef52e3821e | Public IP: 34.225.198.56 | Private IP: 10.0.1.44 | AZ: us-east-1a
+
+
+EOT
+public_subnet_id = "subnet-056f84bc8b6a48097"
+security_group_id = "sg-0bcf13db0167312d6"
+session_manager_commands = [
+  "aws ssm start-session --target i-040e18f87c0486ea2",
+  "aws ssm start-session --target i-0c2a9d8ef52e3821e",
+]
+ssh_commands = [
+  "ssh -i ~/.ssh/srft-networking-key.pem ec2-user@54.84.110.211",
+  "ssh -i ~/.ssh/srft-networking-key.pem ec2-user@34.225.198.56",
+]
+ssh_key_name = "srft-networking-key"
+vpc_id = "vpc-08e71f33878a1bd22"

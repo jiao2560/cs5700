@@ -1,0 +1,19 @@
+# Terraform files
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+*.terraform.lock.hcl
+
+# SSH keys
+*.pem
+*.ppk
+
+# Editor files
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
